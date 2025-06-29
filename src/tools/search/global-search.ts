@@ -1,7 +1,7 @@
 import { BaseTool } from '../base.js';
 import { ProductboardAPIClient } from '@api/index.js';
 import { Logger } from '@utils/logger.js';
-
+import { Permission, AccessLevel } from '@auth/permissions.js';
 interface GlobalSearchParams {
   query: string;
   types?: Array<'feature' | 'note' | 'product' | 'objective' | 'user'>;
@@ -38,6 +38,11 @@ export class GlobalSearchTool extends BaseTool<GlobalSearchParams> {
             description: 'Maximum results per type',
           },
         },
+      },
+      {
+        requiredPermissions: [Permission.SEARCH],
+        minimumAccessLevel: AccessLevel.READ,
+        description: 'Requires search access',
       },
       apiClient,
       logger

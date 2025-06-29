@@ -1,6 +1,7 @@
 import { BaseTool } from '../base.js';
 import { ProductboardAPIClient } from '@api/index.js';
 import { Logger } from '@utils/logger.js';
+import { Permission, AccessLevel } from '@auth/permissions.js';
 
 interface ListNotesParams {
   feature_id?: string;
@@ -54,6 +55,11 @@ export class ListNotesTool extends BaseTool<ListNotesParams> {
             default: 20,
           },
         },
+      },
+      {
+        requiredPermissions: [Permission.NOTES_READ],
+        minimumAccessLevel: AccessLevel.READ,
+        description: 'Requires read access to notes',
       },
       apiClient,
       logger

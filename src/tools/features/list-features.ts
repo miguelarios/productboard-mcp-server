@@ -1,6 +1,7 @@
 import { BaseTool } from '../base.js';
 import { ProductboardAPIClient } from '../../api/client.js';
 import { Logger } from '../../utils/logger.js';
+import { Permission, AccessLevel } from '../../auth/permissions.js';
 
 interface ListFeaturesParams {
   status?: 'new' | 'in_progress' | 'validation' | 'done' | 'archived';
@@ -75,6 +76,11 @@ export class ListFeaturesTool extends BaseTool<ListFeaturesParams> {
             description: 'Sort order',
           },
         },
+      },
+      {
+        requiredPermissions: [Permission.FEATURES_READ],
+        minimumAccessLevel: AccessLevel.READ,
+        description: 'Requires read access to features',
       },
       apiClient,
       logger

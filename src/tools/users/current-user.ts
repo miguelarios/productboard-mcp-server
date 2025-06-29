@@ -1,6 +1,7 @@
 import { BaseTool } from '../base.js';
 import { ProductboardAPIClient } from '@api/index.js';
 import { Logger } from '@utils/logger.js';
+import { Permission, AccessLevel } from '@auth/permissions.js';
 
 interface CurrentUserParams {}
 
@@ -12,6 +13,11 @@ export class CurrentUserTool extends BaseTool<CurrentUserParams> {
       {
         type: 'object',
         properties: {},
+      },
+      {
+        requiredPermissions: [Permission.USERS_READ],
+        minimumAccessLevel: AccessLevel.READ,
+        description: 'Requires read access to user information',
       },
       apiClient,
       logger

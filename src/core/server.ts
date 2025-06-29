@@ -1,18 +1,47 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { 
+  ListToolsRequestSchema, 
+  CallToolRequestSchema
+} from '@modelcontextprotocol/sdk/types.js';
+
+// Import types for resources and prompts - will use fallback if not available
+let ListResourcesRequestSchema: any;
+let ReadResourceRequestSchema: any;
+let ListPromptsRequestSchema: any;
+let GetPromptRequestSchema: any;
+
+// Try to import the request schemas, fallback to dummy schemas if not available
+try {
+  const mcpTypes = require('@modelcontextprotocol/sdk/types.js');
+  ListResourcesRequestSchema = mcpTypes.ListResourcesRequestSchema;
+  ReadResourceRequestSchema = mcpTypes.ReadResourceRequestSchema;
+  ListPromptsRequestSchema = mcpTypes.ListPromptsRequestSchema;
+  GetPromptRequestSchema = mcpTypes.GetPromptRequestSchema;
+} catch (error) {
+  // Fallback schemas for development/compatibility
+  const dummySchema = { type: 'object', properties: {} };
+  ListResourcesRequestSchema = dummySchema;
+  ReadResourceRequestSchema = dummySchema;
+  ListPromptsRequestSchema = dummySchema;
+  GetPromptRequestSchema = dummySchema;
+}
 import {
   ServerMetrics,
   HealthStatus,
 } from './types.js';
 import { MCPProtocolHandler } from './protocol.js';
 import { ToolRegistry } from './registry.js';
+import { ResourceRegistry } from './resource-registry.js';
+import { PromptRegistry } from './prompt-registry.js';
 import { AuthenticationManager } from '@auth/index.js';
 import { AuthenticationType } from '@auth/types.js';
+import { PermissionDiscoveryService } from '@auth/permission-discovery.js';
+import { UserPermissions } from '@auth/permissions.js';
 import { ProductboardAPIClient } from '@api/index.js';
 import { RateLimiter, CacheModule } from '@middleware/index.js';
 import { Config, Logger } from '@utils/index.js';
-import { ServerError } from '@utils/errors.js';
+import { ServerError, ProtocolError, ToolExecutionError } from '@utils/errors.js';
 
 export interface ServerDependencies {
   config: Config;
@@ -20,9 +49,13 @@ export interface ServerDependencies {
   authManager: AuthenticationManager;
   apiClient: ProductboardAPIClient;
   toolRegistry: ToolRegistry;
+  resourceRegistry: ResourceRegistry;
+  promptRegistry: PromptRegistry;
   rateLimiter: RateLimiter;
   cache: CacheModule;
   protocolHandler: MCPProtocolHandler;
+  permissionDiscovery: PermissionDiscoveryService;
+  userPermissions?: UserPermissions;
 }
 
 export class ProductboardMCPServer {
@@ -93,7 +126,10 @@ export class ProductboardMCPServer {
 
     const cache = new CacheModule(config.cache);
     const toolRegistry = new ToolRegistry(logger);
+    const resourceRegistry = new ResourceRegistry(logger);
+    const promptRegistry = new PromptRegistry(logger);
     const protocolHandler = new MCPProtocolHandler(toolRegistry, logger);
+    const permissionDiscovery = new PermissionDiscoveryService(apiClient, logger);
 
     const dependencies: ServerDependencies = {
       config,
@@ -101,9 +137,12 @@ export class ProductboardMCPServer {
       authManager,
       apiClient,
       toolRegistry,
+      resourceRegistry,
+      promptRegistry,
       rateLimiter,
       cache,
       protocolHandler,
+      permissionDiscovery,
     };
 
     return new ProductboardMCPServer(dependencies);
@@ -143,7 +182,21 @@ export class ProductboardMCPServer {
         logger.info('API connection established');
       }
 
-      // Register tools
+      // Discover user permissions (skip in test mode)
+      if (process.env.NODE_ENV === 'test') {
+        logger.info('Skipping permission discovery in test mode');
+      } else {
+        logger.info('Discovering user permissions...');
+        const userPermissions = await this.dependencies.permissionDiscovery.discoverUserPermissions();
+        this.dependencies.userPermissions = userPermissions;
+        logger.info('Permission discovery completed', {
+          accessLevel: userPermissions.accessLevel,
+          isReadOnly: userPermissions.isReadOnly,
+          permissionCount: userPermissions.permissions.size,
+        });
+      }
+
+      // Register tools based on user permissions
       await this.registerTools();
 
       // Initialize MCP server
@@ -191,8 +244,9 @@ export class ProductboardMCPServer {
   }
 
   private initializeMCPServer(): void {
-    const { logger, toolRegistry } = this.dependencies;
+    const { logger, toolRegistry, resourceRegistry, promptRegistry } = this.dependencies;
 
+    // Create server with proper SDK constructor signature
     this.server = new Server(
       {
         name: 'productboard-mcp',
@@ -201,28 +255,83 @@ export class ProductboardMCPServer {
       {
         capabilities: {
           tools: {},
+          resources: {},
+          prompts: {},
         },
       },
     );
 
     this.transport = new StdioServerTransport();
 
-    // Set up request handlers
-    // Note: Using type assertion due to TypeScript definition mismatch with actual implementation
-    (this.server as any).setRequestHandler(ListToolsRequestSchema, async () => {
+    // Set up request handlers using proper SDK types
+    
+    // Tools handlers
+    this.server.setRequestHandler(ListToolsRequestSchema, async () => {
       return {
         tools: toolRegistry.listTools(),
       };
     });
 
-    // Set up tool execution handler
-    (this.server as any).setRequestHandler(CallToolRequestSchema, async (request: any) => {
+    // Resources handlers
+    this.server.setRequestHandler(ListResourcesRequestSchema, async () => {
+      return {
+        resources: resourceRegistry.listResources(),
+      };
+    });
+
+    this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+      const { uri } = request.params as { uri: string };
+      const resource = resourceRegistry.getResourceByUri(uri);
+      
+      if (!resource) {
+        throw new Error(`Resource not found: ${uri}`);
+      }
+
+      const content = await resource.retrieve();
+      return {
+        contents: [content],
+      };
+    });
+
+    // Prompts handlers  
+    this.server.setRequestHandler(ListPromptsRequestSchema, async () => {
+      return {
+        prompts: promptRegistry.listPrompts(),
+      };
+    });
+
+    this.server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+      const { name, arguments: args } = request.params as { name: string; arguments?: any };
+      const prompt = promptRegistry.getPrompt(name);
+      
+      if (!prompt) {
+        throw new Error(`Prompt not found: ${name}`);
+      }
+
+      const messages = await prompt.execute(args);
+      return {
+        messages,
+      };
+    });
+
+    // Set up tool execution handler with proper error handling
+    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const startTime = Date.now();
       this.metrics.requestsTotal++;
       this.metrics.activeConnections++;
 
       try {
-        const { name, arguments: args } = request.params;
+        // Validate request params
+        if (!request.params || typeof request.params !== 'object') {
+          throw new ProtocolError('Request params are required');
+        }
+
+        const { name, arguments: args } = request.params as { name?: string; arguments?: unknown };
+
+        // Validate tool name
+        if (!name || typeof name !== 'string') {
+          throw new ProtocolError('Tool name is required and must be a string');
+        }
 
         const result = await this.handleToolExecution(name, args);
 
@@ -233,7 +342,21 @@ export class ProductboardMCPServer {
       } catch (error) {
         this.metrics.requestsFailed++;
         logger.error('Tool execution failed', error);
-        throw error;
+        
+        // Re-throw with proper error handling
+        if (error instanceof ProtocolError || error instanceof ToolExecutionError) {
+          throw error;
+        }
+        
+        const toolName = request.params && typeof request.params === 'object' && 'name' in request.params && typeof (request.params as any).name === 'string' 
+          ? (request.params as any).name 
+          : 'unknown';
+        
+        throw new ToolExecutionError(
+          error instanceof Error ? error.message : 'Unknown error during tool execution',
+          toolName,
+          error instanceof Error ? error : undefined
+        );
       } finally {
         this.metrics.activeConnections--;
       }
@@ -268,48 +391,77 @@ export class ProductboardMCPServer {
     logger.info('Registering Productboard tools...');
 
     try {
-      // Import only essential tools first to isolate any hanging issues
-      const {
-        // User tools (simple, no complex dependencies)
-        CurrentUserTool,
+      // Import all available tools from the main index
+      const allTools = await import('@tools/index.js');
+      logger.info('All tools imported successfully');
 
-        // Feature tools (core functionality)
-        CreateFeatureTool,
-        ListFeaturesTool,
-        GetFeatureTool,
-      } = await import('@tools/index.js');
+      // Extract all tool constructors from the imported module
+      const toolConstructors = Object.values(allTools).filter(
+        (tool): tool is new (...args: any[]) => any => 
+          typeof tool === 'function' && 
+          tool.name.endsWith('Tool') &&
+          tool.prototype &&
+          typeof tool.prototype.execute === 'function'
+      );
 
-      logger.info('Tools imported successfully');
+      logger.info(`Found ${toolConstructors.length} tool constructors to register`);
 
-      // Register tools one by one with error handling
-      try {
-        logger.info('Registering CurrentUserTool...');
-        toolRegistry.registerTool(new CurrentUserTool(apiClient, logger));
-        logger.info('CurrentUserTool registered');
+      // Register tools one by one with permission checking and error handling
+      let registeredCount = 0;
+      let failedCount = 0;
+      let skippedCount = 0;
+      const { userPermissions } = this.dependencies;
 
-        logger.info('Registering CreateFeatureTool...');
-        toolRegistry.registerTool(new CreateFeatureTool(apiClient, logger));
-        logger.info('CreateFeatureTool registered');
-
-        logger.info('Registering ListFeaturesTool...');
-        toolRegistry.registerTool(new ListFeaturesTool(apiClient, logger));
-        logger.info('ListFeaturesTool registered');
-
-        logger.info('Registering GetFeatureTool...');
-        toolRegistry.registerTool(new GetFeatureTool(apiClient, logger));
-        logger.info('GetFeatureTool registered');
-
-      } catch (error) {
-        logger.error('Error during tool registration:', error);
-        throw error;
+      for (const ToolConstructor of toolConstructors) {
+        try {
+          logger.debug(`Checking permissions for ${ToolConstructor.name}...`);
+          
+          // Create a temporary tool instance to check permissions
+          const tempToolInstance = new ToolConstructor(apiClient, logger);
+          
+          // Check if user has permission to use this tool
+          if (userPermissions && !tempToolInstance.isAvailableForUser(userPermissions)) {
+            const missingPermissions = tempToolInstance.getMissingPermissions(userPermissions);
+            logger.debug(`Skipping ${ToolConstructor.name} - insufficient permissions. Missing: ${missingPermissions.join(', ')}`);
+            skippedCount++;
+            continue;
+          }
+          
+          logger.debug(`Registering ${ToolConstructor.name}...`);
+          toolRegistry.registerTool(tempToolInstance);
+          registeredCount++;
+          logger.debug(`${ToolConstructor.name} registered successfully`);
+        } catch (error) {
+          failedCount++;
+          logger.error(`Failed to register ${ToolConstructor.name}:`, error);
+          // Continue with other tools instead of failing completely
+        }
       }
 
-      logger.info(`Tool registration complete. Registered ${toolRegistry.size()} tools`);
+      // Log registration summary
+      const totalProcessed = registeredCount + failedCount + skippedCount;
+      logger.info(`Tool registration summary: ${registeredCount} registered, ${skippedCount} skipped (permissions), ${failedCount} failed out of ${totalProcessed} total tools`);
+      
+      if (failedCount > 0) {
+        logger.warn(`Tool registration completed with ${failedCount} failures.`);
+      }
+      
+      if (skippedCount > 0) {
+        logger.info(`${skippedCount} tools were skipped due to insufficient permissions. Use a token with higher privileges to access more tools.`);
+      }
+
+      // Verify the registry size matches our expectations
+      const actualRegisteredCount = toolRegistry.size();
+      if (actualRegisteredCount !== registeredCount) {
+        logger.warn(`Registry size mismatch: expected ${registeredCount}, actual ${actualRegisteredCount}`);
+      }
+
     } catch (error) {
       logger.error('Failed to import or register tools:', error);
       throw error;
     }
   }
+
 
   private updateResponseTime(responseTime: number): void {
     const currentAverage = this.metrics.averageResponseTime;
