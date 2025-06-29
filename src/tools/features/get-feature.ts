@@ -53,7 +53,7 @@ export class GetFeatureTool extends BaseTool<GetFeatureParams> {
 
     return {
       success: true,
-      data: response,
+      data: (response as any).data || response,
     };
   }
 }

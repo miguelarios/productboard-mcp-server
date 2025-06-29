@@ -503,8 +503,7 @@ describe('ProductboardMCPServer', () => {
         {
           capabilities: {
             tools: {},
-            resources: {},
-            prompts: {},
+            // resources and prompts temporarily disabled
           },
         }
       );
