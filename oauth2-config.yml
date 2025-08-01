@@ -1,0 +1,125 @@
+# Productboard MCP OAuth2 Scope Configuration
+# This file defines which OAuth2 scopes to request during authorization
+# Scopes determine which Productboard API endpoints and MCP tools will be available
+
+oauth2:
+  # Individual scopes with descriptions
+  # Add/remove scopes based on your Productboard OAuth2 application configuration
+  available_scopes:
+    # === User Management ===
+    users:read: "List workspace users and view basic user information"
+    users_pii:read: "Access user personally identifiable information" 
+    members_pii:read: "Access Productboard member personal information"
+    users:manage: "Edit user information and manage user accounts"
+    
+    # === Product Hierarchy & Features ===
+    product_hierarchy_data:read: "View products, components, and features"
+    product_hierarchy_data:create: "Create new products, components, and features"
+    product_hierarchy_data:manage: "Edit and delete products, components, and features"
+    
+    # === Customer Feedback & Notes ===
+    notes:read: "View customer feedback notes and insights"
+    notes:create: "Create new customer feedback notes"
+    feedback_forms:create: "Submit notes via feedback forms"
+    
+    # === Releases & Planning ===
+    releases:read: "View releases, release groups, and timelines"
+    releases:create: "Create new releases and release groups"
+    releases:manage: "Edit releases, manage feature assignments, update status"
+    
+    # === Objectives & Key Results (OKRs) ===
+    objectives:read: "View objectives and strategic goals"
+    objectives:create: "Create new strategic objectives"
+    objectives:manage: "Edit objectives and link features to them"
+    key_results:read: "View key results and metrics"
+    key_results:create: "Create new key results"
+    key_results:manage: "Edit and update key results"
+    
+    # === Advanced Features ===
+    initiatives:read: "View initiatives (if available in your Productboard plan)"
+    initiatives:create: "Create new initiatives"
+    initiatives:manage: "Edit and manage initiatives"
+    custom_fields:read: "View custom field definitions"
+    
+    # === Feedback Form Configuration ===
+    feedback_form_configurations:read: "View feedback form configurations"
+    
+    # === Integration & Plugin Management ===
+    plugin_integrations:manage: "Manage UI plugins and third-party integrations"
+
+  # Official Productboard Role-based scope presets
+  # Based on: https://developer.productboard.com/docs/how-to-integrate-with-productboard-via-oauth2-developer-documentation#access-scopes
+  presets:
+    # CONTRIBUTOR - Most restricted access
+    # Can create notes and access basic user info
+    contributor:
+      - notes:create
+      - users:read
+      - users_pii:read
+      - members_pii:read
+    
+    # MAKER - Limited create and read permissions  
+    # Can create releases, notes, and manage users
+    maker:
+      - notes:create
+      - users:read
+      - users_pii:read
+      - members_pii:read
+      - users:manage
+      - releases:create
+      - feedback_forms:create
+    
+    # ADMIN - Most comprehensive access
+    # Full access to product hierarchy, releases, and system management
+    admin:
+      - product_hierarchy_data:read
+      - product_hierarchy_data:create
+      - product_hierarchy_data:manage
+      - custom_fields:read
+      - releases:read
+      - releases:create
+      - releases:manage
+      - notes:create
+      - users:read
+      - users:manage
+      - users_pii:read
+      - members_pii:read
+      - plugin_integrations:manage
+      - objectives:read
+      - objectives:create
+      - objectives:manage
+      - key_results:read
+      - key_results:create
+      - key_results:manage
+      - initiatives:read
+      - initiatives:create
+      - initiatives:manage
+      - feedback_form_configurations:read
+      - feedback_forms:create
+    
+    # Custom preset - modify as needed for your specific requirements
+    custom:
+      - users:read
+      - product_hierarchy_data:read
+      - notes:create
+      # Add/remove scopes as needed for your use case
+
+# Default settings
+defaults:
+  preset: "contributor"  # Default preset if none specified
+  
+# Tool mapping - which scopes enable which MCP tools
+# This is for reference only - the server automatically discovers this
+tool_requirements:
+  pb_user_current: [users:read]
+  pb_user_list: [users:read]
+  pb_feature_get: [product_hierarchy_data:read]
+  pb_feature_list: [product_hierarchy_data:read] 
+  pb_feature_create: [product_hierarchy_data:create]
+  pb_feature_update: [product_hierarchy_data:manage]
+  pb_feature_delete: [product_hierarchy_data:manage]
+  pb_note_create: [notes:create]
+  pb_note_list: [notes:read]
+  pb_release_list: [releases:read]
+  pb_release_create: [releases:create]
+  # ... (server discovers the rest automatically)

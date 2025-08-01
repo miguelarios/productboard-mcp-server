@@ -262,7 +262,8 @@ export class ProductboardAPIClient {
 
   async testConnection(): Promise<boolean> {
     try {
-      await this.get('/features');
+      // Use /users endpoint as it only requires users:read scope
+      await this.get('/users');
       return true;
     } catch (error) {
       if (error instanceof APIAuthenticationError) {

@@ -173,9 +173,22 @@ export class ProductboardMCPServer {
       // Discover user permissions (skip in test mode)
       if (process.env.NODE_ENV !== 'test') {
         logger.info('Discovering user permissions...');
-        const userPermissions = await this.dependencies.permissionDiscovery.discoverUserPermissions();
+        
+        let userPermissions: UserPermissions;
+        
+        // Bearer tokens get full admin access according to Productboard API docs
+        if (this.dependencies.config.auth.type === AuthenticationType.BEARER_TOKEN) {
+          logger.info('Using Bearer token - granting full admin permissions');
+          userPermissions = this.dependencies.permissionDiscovery.grantFullPermissions();
+        } else {
+          // OAuth2 tokens need permission discovery based on scopes
+          logger.info('Using OAuth2 - discovering scoped permissions');
+          userPermissions = await this.dependencies.permissionDiscovery.discoverUserPermissions();
+        }
+        
         this.dependencies.userPermissions = userPermissions;
         logger.info('Permission discovery completed', {
+          authType: this.dependencies.config.auth.type,
           accessLevel: userPermissions.accessLevel,
           isReadOnly: userPermissions.isReadOnly,
           permissionCount: userPermissions.permissions.size,

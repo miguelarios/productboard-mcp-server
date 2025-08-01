@@ -103,7 +103,7 @@ export class ConfigManager {
         redirectUri: env.PRODUCTBOARD_OAUTH_REDIRECT_URI,
       },
       api: {
-        baseUrl: env.PRODUCTBOARD_API_BASE_URL || 'https://api.productboard.com/v1',
+        baseUrl: env.PRODUCTBOARD_API_BASE_URL || 'https://api.productboard.com',
         timeout: parseInt(env.PRODUCTBOARD_API_TIMEOUT || '10000'),
         retryAttempts: parseInt(env.API_RETRY_ATTEMPTS || '3'),
         retryDelay: parseInt(env.API_RETRY_DELAY || '1000'),

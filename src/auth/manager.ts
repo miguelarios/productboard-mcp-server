@@ -10,6 +10,9 @@ import { OAuth2Auth, OAuth2Config } from './oauth2.js';
 import { SecureCredentialStore } from './store.js';
 import { ProductboardAPIError } from '@api/errors.js';
 import { Logger } from '@utils/logger.js';
+import { readFileSync, existsSync, writeFileSync } from 'fs';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
 
 export class AuthenticationManager implements AuthManagerInterface {
   private authType: AuthenticationType;
@@ -23,9 +26,10 @@ export class AuthenticationManager implements AuthManagerInterface {
     this.authType = config.type;
     this.store = new SecureCredentialStore();
     this.logger = logger;
-    this.baseUrl = config.baseUrl || 'https://api.productboard.com/v1';
+    this.baseUrl = config.baseUrl || 'https://api.productboard.com';
 
     this.initializeAuthHandlers(config);
+    this.loadSavedTokens();
   }
 
   private initializeAuthHandlers(config: AuthConfig): void {
@@ -42,12 +46,93 @@ export class AuthenticationManager implements AuthManagerInterface {
       const oauth2Config: OAuth2Config = {
         clientId: config.credentials.clientId,
         clientSecret: config.credentials.clientSecret,
-        authorizationEndpoint: config.authorizationEndpoint || `${this.baseUrl}/oauth/authorize`,
-        tokenEndpoint: config.tokenEndpoint || `${this.baseUrl}/oauth/token`,
+        authorizationEndpoint: config.authorizationEndpoint || `${this.baseUrl}/oauth2/authorize`,
+        tokenEndpoint: config.tokenEndpoint || `${this.baseUrl}/oauth2/token`,
         redirectUri: 'http://localhost:3000/callback',
       };
 
       this.oauth2Auth = new OAuth2Auth(oauth2Config);
+    }
+  }
+
+  private loadSavedTokens(): void {
+    if (this.authType !== AuthenticationType.OAUTH2) {
+      this.logger.debug('Skipping token loading - not OAuth2 mode');
+      return;
+    }
+
+    try {
+      // Try multiple potential locations for the tokens file
+      const __filename = fileURLToPath(import.meta.url);
+      const __dirname = dirname(__filename);
+      const potentialPaths = [
+        resolve(process.cwd(), '.pb.tokens'),
+        resolve(__dirname, '..', '..', '.pb.tokens'), // relative to dist directory
+        resolve(process.env.HOME || '~', '.pb.tokens'), // fallback to home directory
+      ];
+      
+      let tokensPath: string | null = null;
+      for (const path of potentialPaths) {
+        this.logger.debug(`Checking for tokens at: ${path}`);
+        if (existsSync(path)) {
+          tokensPath = path;
+          break;
+        }
+      }
+      
+      if (tokensPath) {
+        this.logger.debug(`Found tokens at: ${tokensPath}`);
+        const tokenData = JSON.parse(readFileSync(tokensPath, 'utf-8'));
+        const expiresAt = new Date(tokenData.expiresAt);
+        const now = new Date();
+        
+        this.logger.debug(`Token expires at: ${expiresAt.toISOString()}, current time: ${now.toISOString()}, expired: ${expiresAt <= now}`);
+        
+        // Only load if token hasn't expired
+        if (expiresAt > now) {
+          const expiresInSeconds = Math.floor((expiresAt.getTime() - Date.now()) / 1000);
+          this.logger.debug(`Loading token that expires in ${expiresInSeconds} seconds`);
+          
+          this.store.updateAccessToken(tokenData.accessToken, expiresInSeconds);
+          if (tokenData.refreshToken) {
+            this.store.updateRefreshToken(tokenData.refreshToken);
+            this.logger.debug('Loaded refresh token');
+          }
+          
+          // Set OAuth2 credentials so validation passes
+          this.store.setCredentials({
+            type: AuthenticationType.OAUTH2,
+            clientId: process.env.PRODUCTBOARD_OAUTH_CLIENT_ID,
+            clientSecret: process.env.PRODUCTBOARD_OAUTH_CLIENT_SECRET,
+          });
+          
+          this.logger.info('Successfully loaded saved OAuth2 tokens');
+        } else {
+          this.logger.warn('Saved OAuth2 tokens have expired');
+        }
+      } else {
+        this.logger.debug('No tokens file found in any expected location');
+      }
+    } catch (error) {
+      this.logger.error('Failed to load saved OAuth2 tokens:', error);
+    }
+  }
+
+  private async saveTokensToFile(accessToken: string, refreshToken: string | undefined, expiresIn: number): Promise<void> {
+    try {
+      const tokensPath = resolve(process.cwd(), '.pb.tokens');
+      const tokenData = {
+        accessToken,
+        refreshToken: refreshToken || null,
+        expiresAt: new Date(Date.now() + expiresIn * 1000).toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      
+      writeFileSync(tokensPath, JSON.stringify(tokenData, null, 2));
+      this.logger.debug('Saved refreshed tokens to file');
+    } catch (error) {
+      this.logger.error('Failed to save refreshed tokens to file:', error);
+      // Don't throw - token refresh succeeded, file save is just for persistence
     }
   }
 
@@ -102,6 +187,10 @@ export class AuthenticationManager implements AuthManagerInterface {
       if (tokenResponse.refresh_token) {
         this.store.updateRefreshToken(tokenResponse.refresh_token);
       }
+      
+      // Persist refreshed tokens to file for laptop reboots/restarts
+      await this.saveTokensToFile(tokenResponse.access_token, tokenResponse.refresh_token, tokenResponse.expires_in);
+      
       this.logger.info('OAuth2 tokens refreshed successfully');
     } catch (error) {
       this.logger.error('Failed to refresh OAuth2 tokens', error);

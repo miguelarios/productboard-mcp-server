@@ -142,7 +142,12 @@ claude-flow
 .claude/
 .roo/
 .roomodes
-CLAUDE.md
 
 # Test files
 test-tool-registration.js
+
+*token*
+*key*
+
+.zshrc
+Configuration.json
