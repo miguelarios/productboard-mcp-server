@@ -94,7 +94,16 @@ export class MCPProtocolHandler implements ProtocolHandler {
       this.logger.debug(`Invoking tool: ${toolName}`, { params });
       const result = await tool.execute(params);
       this.logger.debug(`Tool ${toolName} completed successfully`);
-      return result;
+      
+      // Format response according to MCP protocol
+      return {
+        content: [
+          {
+            type: "text",
+            text: typeof result === 'string' ? result : JSON.stringify(result, null, 2)
+          }
+        ]
+      };
     } catch (error) {
       this.logger.error(`Tool ${toolName} execution failed`, error);
       throw new ToolExecutionError(
