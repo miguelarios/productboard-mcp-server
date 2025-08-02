@@ -119,36 +119,121 @@ export class SearchFeaturesTool extends BaseTool<SearchFeaturesParams> {
 
   protected async executeInternal(params: SearchFeaturesParams): Promise<ToolExecutionResult> {
     try {
-      this.logger.info('Searching features', { query: params.query });
+      this.logger.info('Searching features with client-side filtering', { query: params.query });
 
-      const queryParams: Record<string, any> = {
-        q: params.query,
-        sort: params.sort || 'relevance',
-        order: params.order || 'desc',
-        limit: params.limit || 20,
-        offset: params.offset || 0,
-      };
+      // Fetch all features using pagination since /search/features doesn't exist
+      this.logger.debug('Fetching all features via pagination...');
+      const allFeatures = await this.apiClient.getAllPages<any>('/features');
+      this.logger.debug(`Fetched ${allFeatures.length} total features`);
 
-      if (params.filters) {
-        if (params.filters.status?.length) queryParams.status = params.filters.status.join(',');
-        if (params.filters.product_ids?.length) queryParams.product_ids = params.filters.product_ids.join(',');
-        if (params.filters.owner_emails?.length) queryParams.owner_emails = params.filters.owner_emails.join(',');
-        if (params.filters.tags?.length) queryParams.tags = params.filters.tags.join(',');
-        if (params.filters.created_after) queryParams.created_after = params.filters.created_after;
-        if (params.filters.created_before) queryParams.created_before = params.filters.created_before;
-        if (params.filters.updated_after) queryParams.updated_after = params.filters.updated_after;
-        if (params.filters.updated_before) queryParams.updated_before = params.filters.updated_before;
-      }
+      // Apply client-side filtering
+      const query = params.query.toLowerCase();
+      let filteredFeatures = allFeatures.filter((feature: any) => {
+        // Text search in name and description
+        const matchesQuery = 
+          (feature.name?.toLowerCase().includes(query)) ||
+          (feature.description?.toLowerCase().includes(query));
 
-      const response = await this.apiClient.makeRequest({
-        method: 'GET',
-        endpoint: '/search/features',
-        params: queryParams,
+        if (!matchesQuery) return false;
+
+        // Apply filters if provided
+        if (params.filters) {
+          // Status filter
+          if (params.filters.status?.length) {
+            const statusMatches = params.filters.status.some(status => 
+              feature.status?.name?.toLowerCase() === status.toLowerCase()
+            );
+            if (!statusMatches) return false;
+          }
+
+          // Owner email filter
+          if (params.filters.owner_emails?.length) {
+            const ownerMatches = params.filters.owner_emails.some(email => 
+              feature.owner?.email?.toLowerCase() === email.toLowerCase()
+            );
+            if (!ownerMatches) return false;
+          }
+
+          // Date filters
+          if (params.filters.created_after) {
+            const createdAt = new Date(feature.createdAt);
+            const afterDate = new Date(params.filters.created_after);
+            if (createdAt <= afterDate) return false;
+          }
+
+          if (params.filters.created_before) {
+            const createdAt = new Date(feature.createdAt);
+            const beforeDate = new Date(params.filters.created_before);
+            if (createdAt >= beforeDate) return false;
+          }
+
+          if (params.filters.updated_after) {
+            const updatedAt = new Date(feature.updatedAt);
+            const afterDate = new Date(params.filters.updated_after);
+            if (updatedAt <= afterDate) return false;
+          }
+
+          if (params.filters.updated_before) {
+            const updatedAt = new Date(feature.updatedAt);
+            const beforeDate = new Date(params.filters.updated_before);
+            if (updatedAt >= beforeDate) return false;
+          }
+
+          // Product IDs filter (check parent component)
+          if (params.filters.product_ids?.length) {
+            const productMatches = params.filters.product_ids.some(id => 
+              feature.parent?.component?.id === id
+            );
+            if (!productMatches) return false;
+          }
+        }
+
+        return true;
       });
+
+      // Sort results
+      const sortField = params.sort || 'relevance';
+      const sortOrder = params.order || 'desc';
+
+      filteredFeatures.sort((a: any, b: any) => {
+        let comparison = 0;
+        
+        switch (sortField) {
+          case 'created_at':
+            comparison = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+            break;
+          case 'updated_at':
+            comparison = new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime();
+            break;
+          case 'relevance':
+          default:
+            // For relevance, prioritize name matches over description matches
+            const aNameMatch = a.name?.toLowerCase().includes(query) ? 1 : 0;
+            const bNameMatch = b.name?.toLowerCase().includes(query) ? 1 : 0;
+            comparison = bNameMatch - aNameMatch;
+            break;
+        }
+
+        return sortOrder === 'desc' ? -comparison : comparison;
+      });
+
+      // Apply pagination
+      const limit = params.limit || 20;
+      const offset = params.offset || 0;
+      const paginatedResults = filteredFeatures.slice(offset, offset + limit);
+
+      this.logger.info(`Feature search completed: ${filteredFeatures.length} matches, returning ${paginatedResults.length} results`);
 
       return {
         success: true,
-        data: response,
+        data: {
+          features: paginatedResults,
+          total: filteredFeatures.length,
+          limit,
+          offset,
+          query: params.query,
+          hasMore: offset + limit < filteredFeatures.length,
+        },
       };
     } catch (error) {
       this.logger.error('Failed to search features', error);
