@@ -117,13 +117,61 @@ export class SearchFeaturesTool extends BaseTool<SearchFeaturesParams> {
     );
   }
 
+  private async fetchAllFeaturesRecursively(endpoint: string): Promise<any[]> {
+    const allFeatures: any[] = [];
+    let currentEndpoint: string | null = endpoint;
+    let pageCount = 0;
+
+    while (currentEndpoint) {
+      pageCount++;
+      this.logger.debug(`Fetching page ${pageCount} from: ${currentEndpoint}`);
+
+      const response: {
+        data: any[];
+        links?: { next?: string };
+      } = await this.apiClient.get(currentEndpoint);
+
+      // Add current page data
+      if (response.data) {
+        allFeatures.push(...response.data);
+        this.logger.debug(`Page ${pageCount}: ${response.data.length} features`);
+      }
+
+      // Check for next link
+      const nextLink: string | undefined = response.links?.next;
+      
+      if (nextLink) {
+        // Extract just the path and query from the full URL
+        try {
+          const url = new URL(nextLink);
+          currentEndpoint = url.pathname + url.search;
+        } catch (error) {
+          // If it's already a relative path, use as-is
+          currentEndpoint = nextLink;
+          this.logger.debug(`Using relative path: ${currentEndpoint}`);
+        }
+      } else {
+        currentEndpoint = null;
+      }
+
+      // Safety check to prevent infinite loops
+      if (pageCount > 100) {
+        this.logger.warn('Reached maximum page limit (100), stopping pagination');
+        break;
+      }
+    }
+
+    this.logger.info(`Completed pagination: ${pageCount} pages, ${allFeatures.length} total features`);
+    return allFeatures;
+  }
+
   protected async executeInternal(params: SearchFeaturesParams): Promise<ToolExecutionResult> {
     try {
       this.logger.info('Searching features with client-side filtering', { query: params.query });
 
-      // Fetch all features using pagination since /search/features doesn't exist
-      this.logger.debug('Fetching all features via pagination...');
-      const allFeatures = await this.apiClient.getAllPages<any>('/features');
+      // Fetch all features by recursively following links.next
+      this.logger.debug('Fetching all features via links.next pagination...');
+      const allFeatures = await this.fetchAllFeaturesRecursively('/features');
       this.logger.debug(`Fetched ${allFeatures.length} total features`);
 
       // Apply client-side filtering
