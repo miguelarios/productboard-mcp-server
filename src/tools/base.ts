@@ -1,4 +1,4 @@
-import { Tool } from '../core/types.js';
+import { Tool, ToolExecutionResult } from '../core/types.js';
 import { Schema, ValidationResult, Validator } from '../middleware/validator.js';
 import { ProductboardAPIClient } from '../api/client.js';
 import { ValidationError as MCPValidationError, ToolExecutionError } from '../utils/errors.js';
@@ -44,7 +44,22 @@ export abstract class BaseTool<TParams = unknown> implements Tool {
 
     // Execute the tool-specific logic
     try {
-      return await this.executeInternal(params);
+      const result = await this.executeInternal(params);
+      
+      // Transform ToolExecutionResult to MCP format
+      if (this.isToolExecutionResult(result)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(result, null, 2)
+            }
+          ]
+        };
+      }
+      
+      // Already in MCP format or other format
+      return result;
     } catch (error) {
       if (error instanceof Error) {
         throw new ToolExecutionError(
@@ -55,6 +70,18 @@ export abstract class BaseTool<TParams = unknown> implements Tool {
       }
       throw error;
     }
+  }
+
+  /**
+   * Check if the result is a ToolExecutionResult that needs MCP transformation
+   */
+  private isToolExecutionResult(result: unknown): result is ToolExecutionResult {
+    return (
+      typeof result === 'object' &&
+      result !== null &&
+      'success' in result &&
+      typeof (result as ToolExecutionResult).success === 'boolean'
+    );
   }
 
   protected abstract executeInternal(params: TParams): Promise<unknown>;
