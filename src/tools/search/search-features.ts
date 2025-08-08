@@ -1,7 +1,6 @@
 import { BaseTool } from '../base.js';
 import { ProductboardAPIClient } from '../../api/client.js';
 import { Logger } from '../../utils/logger.js';
-import { ToolExecutionResult } from '../../core/types.js';
 import { Permission, AccessLevel } from '../../auth/permissions.js';
 
 interface SearchFeaturesParams {
@@ -165,7 +164,7 @@ export class SearchFeaturesTool extends BaseTool<SearchFeaturesParams> {
     return allFeatures;
   }
 
-  protected async executeInternal(params: SearchFeaturesParams): Promise<ToolExecutionResult> {
+  protected async executeInternal(params: SearchFeaturesParams): Promise<unknown> {
     try {
       this.logger.info('Searching features with client-side filtering', { query: params.query });
 
@@ -273,22 +272,33 @@ export class SearchFeaturesTool extends BaseTool<SearchFeaturesParams> {
       this.logger.info(`Feature search completed: ${filteredFeatures.length} matches, returning ${paginatedResults.length} results`);
 
       return {
-        success: true,
-        data: {
-          features: paginatedResults,
-          total: filteredFeatures.length,
-          limit,
-          offset,
-          query: params.query,
-          hasMore: offset + limit < filteredFeatures.length,
-        },
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              features: paginatedResults,
+              total: filteredFeatures.length,
+              limit,
+              offset,
+              query: params.query,
+              hasMore: offset + limit < filteredFeatures.length,
+            }, null, 2)
+          }
+        ]
       };
     } catch (error) {
       this.logger.error('Failed to search features', error);
       
       return {
-        success: false,
-        error: `Failed to search features: ${(error as Error).message}`,
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: `Failed to search features: ${(error as Error).message}`,
+            }, null, 2)
+          }
+        ]
       };
     }
   }
