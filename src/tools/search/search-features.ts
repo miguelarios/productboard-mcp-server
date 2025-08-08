@@ -16,6 +16,10 @@ interface SearchFeaturesParams {
     updated_after?: string;
     updated_before?: string;
   };
+  // New API-specific parameters
+  status_id?: string; // UUID for status ID
+  note_id?: string; // UUID for note ID  
+  include_archived?: boolean; // Include archived features (defaults to false)
   sort?: 'relevance' | 'created_at' | 'updated_at' | 'votes' | 'comments';
   order?: 'asc' | 'desc';
   limit?: number;
@@ -80,6 +84,19 @@ export class SearchFeaturesTool extends BaseTool<SearchFeaturesParams> {
               },
             },
           },
+          status_id: {
+            type: 'string',
+            description: 'Filter by status ID (UUID) - server-side filtering',
+          },
+          note_id: {
+            type: 'string', 
+            description: 'Filter by associated note ID (UUID) - server-side filtering',
+          },
+          include_archived: {
+            type: 'boolean',
+            default: false,
+            description: 'Include archived features in results (defaults to false)',
+          },
           sort: {
             type: 'string',
             enum: ['relevance', 'created_at', 'updated_at', 'votes', 'comments'],
@@ -117,9 +134,48 @@ export class SearchFeaturesTool extends BaseTool<SearchFeaturesParams> {
     );
   }
 
-  private async fetchAllFeaturesRecursively(endpoint: string): Promise<any[]> {
+  private buildApiQueryParams(params: SearchFeaturesParams): URLSearchParams {
+    const queryParams = new URLSearchParams();
+    
+    // Always exclude archived features unless specifically requested
+    const includeArchived = params.include_archived ?? false;
+    queryParams.set('archived', includeArchived.toString());
+    
+    // Status filtering - prefer status_id (UUID) over status name
+    if (params.status_id) {
+      queryParams.set('status.id', params.status_id);
+    } else if (params.filters?.status?.length) {
+      // Use first status name for server-side filtering
+      queryParams.set('status.name', params.filters.status[0]);
+    }
+    
+    // Product/Parent filtering
+    if (params.filters?.product_ids?.length) {
+      // Use first product ID for server-side filtering
+      queryParams.set('parent.id', params.filters.product_ids[0]);
+    }
+    
+    // Owner filtering
+    if (params.filters?.owner_emails?.length) {
+      // Use first owner email for server-side filtering
+      queryParams.set('owner.email', params.filters.owner_emails[0]);
+    }
+    
+    // Note filtering
+    if (params.note_id) {
+      queryParams.set('note.id', params.note_id);
+    }
+    
+    return queryParams;
+  }
+
+  private async fetchAllFeaturesRecursively(baseEndpoint: string, queryParams?: URLSearchParams): Promise<any[]> {
     const allFeatures: any[] = [];
-    let currentEndpoint: string | null = endpoint;
+    
+    // Build initial endpoint with query parameters
+    const queryString = queryParams?.toString();
+    const initialEndpoint = queryString ? `${baseEndpoint}?${queryString}` : baseEndpoint;
+    let currentEndpoint: string | null = initialEndpoint;
     let pageCount = 0;
 
     while (currentEndpoint) {
@@ -167,12 +223,16 @@ export class SearchFeaturesTool extends BaseTool<SearchFeaturesParams> {
 
   protected async executeInternal(params: SearchFeaturesParams): Promise<ToolExecutionResult> {
     try {
-      this.logger.info('Searching features with client-side filtering', { query: params.query });
+      this.logger.info('Searching features with hybrid server/client-side filtering', { query: params.query });
 
-      // Fetch all features by recursively following links.next
-      this.logger.debug('Fetching all features via links.next pagination...');
-      const allFeatures = await this.fetchAllFeaturesRecursively('/features');
-      this.logger.debug(`Fetched ${allFeatures.length} total features`);
+      // Build API query parameters for server-side filtering
+      const apiQueryParams = this.buildApiQueryParams(params);
+      this.logger.debug('API query parameters:', Object.fromEntries(apiQueryParams.entries()));
+
+      // Fetch features with server-side filtering
+      this.logger.debug('Fetching features with server-side filtering...');
+      const allFeatures = await this.fetchAllFeaturesRecursively('/features', apiQueryParams);
+      this.logger.debug(`Fetched ${allFeatures.length} features after server-side filtering`);
 
       // Apply client-side filtering
       const query = params.query.toLowerCase();
@@ -184,18 +244,18 @@ export class SearchFeaturesTool extends BaseTool<SearchFeaturesParams> {
 
         if (!matchesQuery) return false;
 
-        // Apply filters if provided
+        // Apply remaining client-side filters (skip those applied server-side)
         if (params.filters) {
-          // Status filter
-          if (params.filters.status?.length) {
+          // Status filter - only apply if multiple statuses and no status_id (server-side handles single status)
+          if (params.filters.status && params.filters.status.length > 1 && !params.status_id) {
             const statusMatches = params.filters.status.some(status => 
               feature.status?.name?.toLowerCase() === status.toLowerCase()
             );
             if (!statusMatches) return false;
           }
 
-          // Owner email filter
-          if (params.filters.owner_emails?.length) {
+          // Owner email filter - only apply if multiple emails (server-side handles single email)
+          if (params.filters.owner_emails && params.filters.owner_emails.length > 1) {
             const ownerMatches = params.filters.owner_emails.some(email => 
               feature.owner?.email?.toLowerCase() === email.toLowerCase()
             );
@@ -227,8 +287,8 @@ export class SearchFeaturesTool extends BaseTool<SearchFeaturesParams> {
             if (updatedAt >= beforeDate) return false;
           }
 
-          // Product IDs filter (check parent component)
-          if (params.filters.product_ids?.length) {
+          // Product IDs filter - only apply if multiple IDs (server-side handles single ID)
+          if (params.filters.product_ids?.length && params.filters.product_ids.length > 1) {
             const productMatches = params.filters.product_ids.some(id => 
               feature.parent?.component?.id === id
             );
